@@ -1,0 +1,13 @@
+{
+  "name": "jenga-multiplayer",
+  "version": "1.0.0",
+  "description": "3D Çok Oyunculu Jenga Oyunu",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  }
+}
