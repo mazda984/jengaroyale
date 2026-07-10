@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multiplayer Dev Jenga</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #0b0f19; font-family: sans-serif; }
+        canvas { display: block; }
+        
+        /* Giriş ve Parti Menüsü */
+        #menu {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #0f172a; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 100; color: white;
+        }
+        .btn {
+            padding: 12px 24px; font-size: 18px; margin: 10px; cursor: pointer;
+            border: none; border-radius: 5px; background: #0ea5e9; color: white; font-weight: bold;
+            transition: background 0.2s;
+        }
+        .btn:hover { background: #0284c7; }
+        input { padding: 12px; font-size: 18px; border-radius: 5px; border: none; text-align: center; margin-bottom: 10px; }
+
+        #bilgi {
+            position: absolute; top: 10px; left: 10px; color: white;
+            background: rgba(0,0,0,0.8); padding: 15px; border-radius: 5px;
+            font-size: 14px; line-height: 1.5; display: none; pointer-events: none;
+        }
+        #olumEkrani {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255, 0, 0, 0.6); color: white; font-family: 'Arial Black', sans-serif;
+            font-size: 60px; display: none; justify-content: center; align-items: center; z-index: 10;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="menu">
+        <h1>🧱 MULTIPLAYER DEV JENGA</h1>
+        <button class="btn" onclick="odaOlustur()">Oda Oluştur (Kod Al)</button>
+        <p>veya var olan bir odaya katıl:</p>
+        <input type="text" id="odaKoduInput" placeholder="5 Haneli Kod Girin">
+        <button class="btn" style="background:#22c55e" onclick="odayaKatil()">Odaya Katıl</button>
+        <p id="menuDurum" style="color:#ef4444; font-weight: bold; margin-top: 15px;"></p>
+    </div>
+
+    <div id="bilgi">
+        <strong>Oda Kodu: <span id="gostergeKodu" style="color:#22c55e">-----</span></strong><br>
+        • Rolünüz: <span id="gostergeRol">Bekleniyor...</span><br>
+        • Hareket: WASD / Yön Tuşları<br>
+        • Zıplama: Boşluk (Space)<br>
+        • Uçurumdan düşen elenir!
+    </div>
+
+    <div id="olumEkrani">DÜŞTÜN! 💀</div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+
+    <script>
+        // --- SUNUCU BAĞLANTISI ---
+        // GitHub ve harici sunucu uyumluluğu için dinamik URL kullanıyoruz
+        const socket = io(window.location.origin); 
+
+        let benimRolum = null;
+        let oyunBasladi = false;
+
+        // --- MENÜ FONKSİYONLARI ---
+        function odaOlustur() {
+            socket.emit('odaOlustur');
+        }
+
+        function odayaKatil() {
+            const kod = document.getElementById('odaKoduInput').value;
+            if(kod.trim() !== "") {
+                socket.emit('odayaKatil', kod);
+            }
+        }
+
+        // --- SOCKET.IO OLAYLARI (AĞ İLETİŞİMİ) ---
+        socket.on('odaOlusturuldu', (data) => {
+            document.getElementById('menuDurum').innerText = "Oda kuruldu! Arkadaşının katılması bekleniyor...";
+            document.getElementById('gostergeKodu').innerText = data.odaKodu;
+            benimRolum = data.oyuncuTipi;
+            document.getElementById('gostergeRol').innerText = "Ev Sahibi (Mavi)";
+        });
+
+        socket.on('oyunBasladi', (oyuncular) => {
+            document.getElementById('menu').style.display = 'none';
+            document.getElementById('bilgi').style.display = 'block';
+            oyunBasladi = true;
+
+            // Rollere göre oyuncu renklerini eşitle ve rakibi sahneye ekle
+            if (benimRolum === 'player1') {
+                rakipMesh.material.color.setHex(0xec4899); // Rakip Pembe
+                scene.add(rakipMesh);
+            } else {
+                benimRolum = 'player2';
+                document.getElementById('gostergeRol').innerText = "Misafir (Pembe)";
+                document.getElementById('gostergeKodu').innerText = document.getElementById('odaKoduInput').value.toUpperCase();
+                playerMesh.material.color.setHex(0xec4899); // Ben Pembeyim
+                rakipMesh.material.color.setHex(0x0ea5e9); // Rakip Mavi
+                scene.add(rakipMesh);
+            }
+            oyuncuReset();
+        });
+
+        socket.on('oyuncuHareketEtti', (data) => {
+            if(oyunBasladi) {
+                rakipMesh.position.set(data.x, data.y, data.z);
+            }
+        });
+
+        socket.on('hata', (mesaj) => {
+            document.getElementById('menuDurum').innerText = mesaj;
+        });
+
+        socket.on('oyuncuAyrildi', () => {
+            alert("Rakip oyundan ayrıldı! Oyun menüye dönüyor.");
+            location.reload();
+        });
+
+        // --- THREE.JS KURULUMU (GÖRSEL MOTOR) ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0f172a);
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Işıklandırma
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+        dirLight.position.set(30, 60, 40);
+        scene.add(dirLight);
+
+        // --- CANNON.JS KURULUMU (FİZİK MOTORU) ---
+        const world = new CANNON.World();
+        world.gravity.set(0, -18, 0); 
+
+        // Jenga Tasarım Parametreleri
+        const bW = 12, bH = 1.2, bD = 2.0, katSayisi = 20, blokSayisi = 6; 
+        let jengaMeshes = [], jengaBodies = [];
+
+        // Jengayı tutan ancak oyuncunun içinden geçtiği Görünmez Fiziksel Platform
+        const floorShape = new CANNON.Box(new CANNON.Vec3(15, 0.5, 15));
+        const floorBody = new CANNON.Body({ mass: 0 });
+        floorBody.addShape(floorShape);
+        floorBody.position.set(0, -0.5, 0);
+        
+        // Çarpışma Filtreleri (Grup 2 = Jenga/Zemin, Grup 1 = Oyuncu)
+        floorBody.collisionFilterGroup = 2;
+        floorBody.collisionFilterMask = 2; 
+        world.addBody(floorBody);
+
+        // --- KULE OLUŞTURMA FONKSİYONU ---
+        function devJengaKulesiYap() {
+            jengaMeshes.forEach(m => scene.remove(m));
+            jengaBodies.forEach(b => world.removeBody(b));
+            jengaMeshes = []; jengaBodies = [];
+            const baslangicOfset = ((blokSayisi - 1) * bD) / 2;
+
+            for (let i = 0; i < katSayisi; i++) {
+                const yPos = i * bH + bH / 2;
+                if (i % 2 === 0) {
+                    for (let j = 0; j < blokSayisi; j++) {
+                        olusturBlok(bW, bH, bD, 0, yPos, (j * bD) - baslangicOfset);
+                    }
+                } else {
+                    for (let j = 0; j < blokSayisi; j++) {
+                        olusturBlok(bD, bH, bW, (j * bD) - baslangicOfset, yPos, 0);
+                    }
+                }
+            }
+        }
+
+        function olusturBlok(w, h, d, x, y, z) {
+            const geo = new THREE.BoxGeometry(w, h, d);
+            const mat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.6 });
+            const mesh = new THREE.Mesh(geo, mat);
+            scene.add(mesh);
+            jengaMeshes.push(mesh);
+
+            const shape = new CANNON.Box(new CANNON.Vec3(w/2, h/2, d/2));
+            const body = new CANNON.Body({ mass: 1.5, shape: shape });
+            body.position.set(x, y, z);
+            
+            body.collisionFilterGroup = 2; 
+            body.collisionFilterMask = 1 | 2; // Hem oyuncu hem zemin/jenga ile temas eder
+            world.addBody(body);
+            jengaBodies.push(body);
+        }
+        
+        devJengaKulesiYap();
+
+        // --- KARAKTERLERİN HAZIRLANMASI ---
+        // Benim Karakterim (Fiziksel ve Görsel)
+        const playerGeo = new THREE.BoxGeometry(1.2, 1.2, 1.2);
+        const playerMat = new THREE.MeshStandardMaterial({ color: 0x0ea5e9 });
+        const playerMesh = new THREE.Mesh(playerGeo, playerMat);
+        scene.add(playerMesh);
+
+        const playerShape = new CANNON.Box(new CANNON.Vec3(0.6, 0.6, 0.6));
+        const playerBody = new CANNON.Body({ mass: 3, shape: playerShape, fixedRotation: true });
+        
+        playerBody.collisionFilterGroup = 1;
+        playerBody.collisionFilterMask = 2; // Sadece jenga bloklarıyla çarpışır, zeminle çarpışmaz!
+        world.addBody(playerBody);
+
+        // Rakip Karakter (Sadece Görsel - Pozisyonu ağdan gelir)
+        const rakipGeo = new THREE.BoxGeometry(1.2, 1.2, 1.2);
+        const rakipMat = new THREE.MeshStandardMaterial({ color: 0xec4899 });
+        const rakipMesh = new THREE.Mesh(rakipGeo, rakipMat);
+
+        function oyuncuReset() {
+            const tepeYukseklik = (katSayisi * bH) + 2;
+            // Oyuncuların kule tepesinde iç içe doğmasını engellemek için ofset
+            if(benimRolum === 'player1') playerBody.position.set(-2, tepeYukseklik, 0);
+            else playerBody.position.set(2, tepeYukseklik, 0);
+            
+            playerBody.velocity.set(0, 0, 0);
+            document.getElementById("olumEkrani").style.display = "none";
+        }
+
+        // --- HAREKET KONTROLLERİ ---
+        const keys = { w: false, s: false, a: false, d: false, ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false };
+        let canJump = false;
+        const HIZ = 10, ZIPLAMA_GUCU = 10;
+
+        window.addEventListener('keydown', (e) => { 
+            if (e.key in keys) keys[e.key] = true; 
+            if (e.key === ' ' && canJump && oyunBasladi) {
+                playerBody.velocity.y = ZIPLAMA_GUCU;
+                canJump = false;
+            }
+        });
+        window.addEventListener('keyup', (e) => { if (e.key in keys) keys[e.key] = false; });
+
+        // --- OYUN DÖNGÜSÜ (RENDER & TICK) ---
+        const timeStep = 1 / 60;
+
+        function animate() {
+            requestAnimationFrame(animate);
+            world.step(timeStep);
+
+            // Görsel küpü fiziksel küpün konumuna taşı
+            playerMesh.position.copy(playerBody.position);
+
+            // Jenga bloklarının fizik hareketlerini görselleştir
+            for (let i = 0; i < jengaMeshes.length; i++) {
+                jengaMeshes[i].position.copy(jengaBodies[i].position);
+                jengaMeshes[i].quaternion.copy(jengaBodies[i].quaternion);
+            }
+
+            if (oyunBasladi) {
+                let moveX = 0, moveZ = 0;
+                if (keys.w || keys.ArrowUp) moveZ = -HIZ;
+                if (keys.s || keys.ArrowDown) moveZ = HIZ;
+                if (keys.a || keys.ArrowLeft) moveX = -HIZ;
+                if (keys.d || keys.ArrowRight) moveX = HIZ;
+
+                playerBody.velocity.x = moveX;
+                playerBody.velocity.z = moveZ;
+
+                // Pozisyonumuzu anlık olarak sunucu üzerinden rakibe gönderiyoruz
+                socket.emit('hareketEt', {
+                    x: playerBody.position.x,
+                    y: playerBody.position.y,
+                    z: playerBody.position.z
+                });
+            }
+
+            // Yere basma kontrolü (Basit dikey hız kontrolü)
+            if (Math.abs(playerBody.velocity.y) < 0.05) canJump = true;
+
+            // 💀 SONSUZ UÇURUM ÖLÜM KONTROLÜ
+            if (playerBody.position.y < -5.5 && oyunBasladi) {
+                oyunBasladi = false;
+                document.getElementById("olumEkrani").style.display = "flex";
+                setTimeout(() => {
+                    devJengaKulesiYap(); // Kuleyi sıfırla
+                    oyunBasladi = true;
+                    oyuncuReset();       // Karakteri tepede canlandır
+                }, 3000);
+            }
+
+            // Kamera Takip Mekanizması
+            camera.position.set(playerMesh.position.x, playerMesh.position.y + 12, playerMesh.position.z + 22);
+            camera.lookAt(playerMesh.position.x, playerMesh.position.y - 2, playerMesh.position.z);
+
+            renderer.render(scene, camera);
+        }
+
+        // Ekran boyutu değiştiğinde 3D sahnede bozulma olmaması için responsive ayar
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>
